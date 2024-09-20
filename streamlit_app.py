@@ -1,151 +1,87 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime as dt
+import yfinance as yf
 
-# Set the title and favicon that appear in the Browser's tab bar.
+# Set the title and favicon that appear in the browser's tab bar.
 st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title='Monte Carlo Stock Price Simulation',
+    page_icon=':chart_with_upwards_trend:',  # Stock chart emoji.
 )
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------
 # Declare some useful functions.
 
+def geo_paths(S, T, r, q, sigma, steps, N):
+    """Generates paths for a geometric Brownian motion."""
+    dt = T / steps
+    ST = np.log(S) + np.cumsum(((r - q - sigma**2 / 2) * dt + 
+                               sigma * np.sqrt(dt) * 
+                               np.random.normal(size=(steps, N))), axis=0)
+    return np.exp(ST)
+
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def get_stock_data(ticker, start, end):
+    """Fetch stock data using yfinance."""
+    stock_data = yf.download(ticker, start=start, end=end)
+    return stock_data['Close']
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
+# -------------------------------------------------------------------
+# Page content and user interaction
 
 # Set the title that appears at the top of the page.
 '''
-# :earth_americas: GDP dashboard
+# :chart_with_upwards_trend: Monte Carlo Stock Price Simulation
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
+Simulate future stock prices using the Monte Carlo method. Select a stock, and adjust parameters like the risk-free rate, volatility, and time horizon.
 '''
 
-# Add some spacing
-''
-''
+# Sidebar input section for parameters
+st.sidebar.header("Monte Carlo Simulation Parameters")
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+stock_ticker = st.sidebar.text_input('Enter stock ticker (e.g., AAPL, TSLA, MSFT):', 'AAPL')
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
+# Date range input for historical data fetching
+end_date = dt.datetime.now()
+start_date = end_date - dt.timedelta(days=300)
 
-countries = gdp_df['Country Code'].unique()
+# Fetch stock data
+if stock_ticker:
+    stock_data = get_stock_data(stock_ticker, start=start_date, end=end_date)
+    st.write(f"Displaying closing prices for {stock_ticker}:")
+    st.line_chart(stock_data)
 
-if not len(countries):
-    st.warning("Select at least one country")
+    # Automatically set S0 (Initial Stock Price) to the most recent stock price
+    S0 = stock_data[-1]
+    st.sidebar.write(f"Latest Stock Price (S_0): {S0:.2f}")
 
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
+    # Sidebar sliders for other parameters
+    K = st.sidebar.slider('Strike Price (K)', min_value=50, max_value=500, value=int(S0 * 1.1))
+    r = st.sidebar.slider('Risk-Free Rate (r)', min_value=0.0, max_value=0.1, value=0.05, step=0.01)
+    sigma = st.sidebar.slider('Volatility (σ)', min_value=0.1, max_value=1.0, value=0.2, step=0.01)
+    T = st.sidebar.slider('Time to Maturity (T)', min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+    N = st.sidebar.slider('Number of Simulations (N)', min_value=10, max_value=1000, value=100)
 
-''
-''
-''
+    # Time steps fixed at 100 for now
+    steps = 100
 
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
+    # Perform Monte Carlo simulation
+    paths = geo_paths(S0, T, r, 0, sigma, steps, N)
 
-st.header('GDP over time', divider='gray')
+    # Plot the simulation
+    st.subheader('Monte Carlo Simulation Results')
+    fig, ax = plt.subplots()
+    ax.plot(paths)
+    ax.set_xlabel("Time Steps")
+    ax.set_ylabel("Stock Price")
+    ax.set_title(f"Simulated Stock Price Paths for {stock_ticker}")
+    st.pyplot(fig)
 
-''
+    # Displaying some statistics
+    st.write(f"Simulated final stock price mean: {paths[-1].mean():.2f}")
+    st.write(f"Simulated final stock price standard deviation: {paths[-1].std():.2f}")
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+else:
+    st.warning("Please enter a valid stock ticker.")
